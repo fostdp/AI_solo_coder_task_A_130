@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "dujiangyan_user"
+  password: "dujiangyan123"
+  dbname: "dujiangyan_db"
+  sslmode: "disable"
+
+mqtt:
+  broker: "tcp://localhost:1883"
+  client_id: "dujiangyan_backend"
+  username: "admin"
+  password: "admin123"
+  topic_prefix: "dujiangyan/alerts"
+
+simulation:
+  time_step: 3600
+  bed_evolution_years: 10
+  dem_grid_size: 5
