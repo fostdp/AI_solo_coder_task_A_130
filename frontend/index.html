@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>都江堰岁修工艺仿真与河床演变分析系统</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="title">
+                <h1>都江堰岁修工艺仿真与河床演变分析系统</h1>
+                <p>Dujiangyan Annual Repair Simulation & Bed Evolution Analysis System</p>
+            </div>
+            <div class="status-bar">
+                <div class="status-item">
+                    <span class="status-label">系统状态</span>
+                    <span class="status-value" id="system-status">运行中</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">数据时间</span>
+                    <span class="status-value" id="data-time">--</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">告警数量</span>
+                    <span class="status-value alert-count" id="alert-count">0</span>
+                </div>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="overview">总览</button>
+            <button class="tab-btn" data-tab="3d-view">三维模型</button>
+            <button class="tab-btn" data-tab="evolution">河床演变</button>
+            <button class="tab-btn" data-tab="repair">岁修仿真</button>
+            <button class="tab-btn" data-tab="alerts">告警中心</button>
+            <button class="tab-btn" data-tab="data">数据监控</button>
+        </nav>
+
+        <main class="content">
+            <section class="tab-content active" id="overview">
+                <div class="overview-grid">
+                    <div class="overview-card main-view">
+                        <h3>都江堰渠首三维全景</h3>
+                        <div id="mini-3d-container" class="mini-canvas"></div>
+                    </div>
+                    <div class="overview-card">
+                        <h3>实时水文参数</h3>
+                        <div class="params-grid" id="hydrology-params">
+                        </div>
+                    </div>
+                    <div class="overview-card">
+                        <h3>监测站点分布</h3>
+                        <div class="station-map" id="station-map">
+                            <canvas id="station-canvas"></canvas>
+                        </div>
+                    </div>
+                    <div class="overview-card">
+                        <h3>河床演变趋势</h3>
+                        <canvas id="evolution-chart"></canvas>
+                    </div>
+                    <div class="overview-card wide">
+                        <h3>卧铁基准与当前河床高程对比</h3>
+                        <canvas id="wolong-chart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-content" id="3d-view">
+                <div class="three-container">
+                    <div class="sidebar-left">
+                        <h4>图层控制</h4>
+                        <div class="layer-control">
+                            <label><input type="checkbox" id="layer-terrain" checked> 地形</label>
+                            <label><input type="checkbox" id="layer-water" checked> 水流粒子</label>
+                            <label><input type="checkbox" id="layer-structures" checked> 水利工程</label>
+                            <label><input type="checkbox" id="layer-wolong" checked> 卧铁标记</label>
+                            <label><input type="checkbox" id="layer-stations" checked> 监测站点</label>
+                        </div>
+                        <h4>显示设置</h4>
+                        <div class="display-control">
+                            <label>水位放大倍数</label>
+                            <input type="range" id="water-scale" min="1" max="10" value="3">
+                            <label>粒子数量</label>
+                            <input type="range" id="particle-count" min="500" max="5000" value="2000" step="100">
+                        </div>
+                        <h4>视图预设</h4>
+                        <div class="view-presets">
+                            <button onclick="setView('overview')">总览</button>
+                            <button onclick="setView('neijiang')">内江</button>
+                            <button onclick="setView('waijiang')">外江</button>
+                            <button onclick="setView('baopingkou')">宝瓶口</button>
+                            <button onclick="setView('feishayan')">飞沙堰</button>
+                        </div>
+                    </div>
+                    <div class="main-canvas-container">
+                        <div id="three-container" class="three-canvas"></div>
+                        <div class="canvas-overlay">
+                            <div class="info-panel" id="info-panel">
+                                <h4>信息面板</h4>
+                                <p>鼠标悬停查看详情</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sidebar-right">
+                        <h4>实时数据</h4>
+                        <div class="realtime-data" id="realtime-data">
+                        </div>
+                        <h4>高程图</h4>
+                        <div class="elevation-legend">
+                            <div class="legend-scale"></div>
+                            <div class="legend-labels">
+                                <span>高</span>
+                                <span>中</span>
+                                <span>低</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-content" id="evolution">
+                <div class="evolution-container">
+                    <div class="evolution-controls">
+                        <div class="control-group">
+                            <label>选择站点</label>
+                            <select id="evolution-station">
+                                <option value="NEIJ-001">内江进水口</option>
+                                <option value="NEIJ-002">内江中段</option>
+                                <option value="NEIJ-003">宝瓶口上游</option>
+                                <option value="WAIJ-001">外江进水口</option>
+                                <option value="WAIJ-002">外江中段</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>预测年限</label>
+                            <select id="prediction-years">
+                                <option value="5">5年</option>
+                                <option value="10" selected>10年</option>
+                                <option value="15">15年</option>
+                                <option value="20">20年</option>
+                            </select>
+                        </div>
+                        <button id="run-prediction" class="btn-primary">运行预测</button>
+                    </div>
+                    <div class="evolution-results">
+                        <div class="result-card">
+                            <h4>河床高程预测</h4>
+                            <canvas id="prediction-chart"></canvas>
+                        </div>
+                        <div class="result-card">
+                            <h4>冲淤变化预测</h4>
+                            <canvas id="erosion-chart"></canvas>
+                        </div>
+                        <div class="result-card wide">
+                            <h4>动态高程图 (2024-2034)</h4>
+                            <div class="timeline-container">
+                                <input type="range" id="timeline-slider" min="0" max="120" value="0" step="12">
+                                <span id="timeline-year">2024年</span>
+                            </div>
+                            <canvas id="dem-2d-canvas" class="dem-canvas"></canvas>
+                        </div>
+                        <div class="stats-cards">
+                            <div class="stat-card">
+                                <span class="stat-label">年均淤积</span>
+                                <span class="stat-value" id="avg-deposition">-- m</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">年均冲刷</span>
+                                <span class="stat-value" id="avg-erosion">-- m</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">10年后高程</span>
+                                <span class="stat-value" id="final-elevation">-- m</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">卧铁超覆风险</span>
+                                <span class="stat-value risk" id="risk-level">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-content" id="repair">
+                <div class="repair-container">
+                    <div class="repair-tabs">
+                        <button class="sub-tab-btn active" data-subtab="macha">杩槎截流仿真</button>
+                        <button class="sub-tab-btn" data-subtab="bamboo">竹笼装石仿真</button>
+                        <button class="sub-tab-btn" data-subtab="records">岁修记录</button>
+                    </div>
+
+                    <div class="sub-tab-content active" id="macha">
+                        <div class="simulation-controls">
+                            <div class="control-group">
+                                <label>位置</label>
+                                <select id="macha-location">
+                                    <option value="neijiang">内江</option>
+                                    <option value="waijiang">外江</option>
+                                </select>
+                            </div>
+                            <div class="control-group">
+                                <label>杩槎数量</label>
+                                <input type="number" id="macha-count" value="20" min="1" max="50">
+                            </div>
+                            <div class="control-group">
+                                <label>初始流量 (m³/s)</label>
+                                <input type="number" id="initial-flow" value="300" min="0">
+                            </div>
+                            <div class="control-group">
+                                <label>初始水位 (m)</label>
+                                <input type="number" id="initial-water-level" value="728.5" step="0.1">
+                            </div>
+                            <button id="run-macha" class="btn-primary">运行杩槎仿真</button>
+                        </div>
+                        <div class="simulation-visualization">
+                            <canvas id="macha-canvas" class="sim-canvas"></canvas>
+                        </div>
+                        <div class="simulation-results">
+                            <div class="result-chart">
+                                <h4>截流效率曲线</h4>
+                                <canvas id="interception-chart"></canvas>
+                            </div>
+                            <div class="result-stats">
+                                <div class="stat-card">
+                                    <span class="stat-label">最终截流效率</span>
+                                    <span class="stat-value" id="final-efficiency">-- %</span>
+                                </div>
+                                <div class="stat-card">
+                                    <span class="stat-label">最终流量</span>
+                                    <span class="stat-value" id="final-flow">-- m³/s</span>
+                                </div>
+                                <div class="stat-card">
+                                    <span class="stat-label">水位抬升</span>
+                                    <span class="stat-value" id="water-rise">-- m</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sub-tab-content" id="bamboo">
+                        <div class="simulation-controls">
+                            <div class="control-group">
+                                <label>位置</label>
+                                <select id="bamboo-location">
+                                    <option value="neijiang">内江</option>
+                                    <option value="waijiang">外江</option>
+                                    <option value="feishayan">飞沙堰</option>
+                                </select>
+                            </div>
+                            <div class="control-group">
+                                <label>竹笼数量</label>
+                                <input type="number" id="bamboo-count" value="25" min="1" max="100">
+                            </div>
+                            <button id="run-bamboo" class="btn-primary">运行竹笼仿真</button>
+                        </div>
+                        <div class="simulation-visualization">
+                            <canvas id="bamboo-canvas" class="sim-canvas"></canvas>
+                        </div>
+                        <div class="simulation-results">
+                            <div class="result-chart">
+                                <h4>竹笼稳定性分布</h4>
+                                <canvas id="stability-chart"></canvas>
+                            </div>
+                            <div class="result-stats">
+                                <div class="stat-card">
+                                    <span class="stat-label">平均稳定性</span>
+                                    <span class="stat-value" id="avg-stability">-- %</span>
+                                </div>
+                                <div class="stat-card">
+                                    <span class="stat-label">总填石量</span>
+                                    <span class="stat-value" id="total-stones">-- 块</span>
+                                </div>
+                                <div class="stat-card">
+                                    <span class="stat-label">堆积高度</span>
+                                    <span class="stat-value" id="deposition-height">-- m</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sub-tab-content" id="records">
+                        <div class="records-container">
+                            <h3>历史岁修记录</h3>
+                            <table class="records-table">
+                                <thead>
+                                    <tr>
+                                        <th>年份</th>
+                                        <th>位置</th>
+                                        <th>类型</th>
+                                        <th>竹笼数</th>
+                                        <th>杩槎数</th>
+                                        <th>淘淤量 (m³)</th>
+                                        <th>修前高程 (m)</th>
+                                        <th>修后高程 (m)</th>
+                                        <th>备注</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="records-body">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-content" id="alerts">
+                <div class="alerts-container">
+                    <div class="alerts-header">
+                        <h3>告警中心</h3>
+                        <div class="alert-filters">
+                            <select id="alert-filter">
+                                <option value="all">全部告警</option>
+                                <option value="unacknowledged">未确认</option>
+                                <option value="acknowledged">已确认</option>
+                                <option value="CRITICAL">严重</option>
+                                <option value="WARNING">警告</option>
+                                <option value="NOTICE">通知</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="alerts-list" id="alerts-list">
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-content" id="data">
+                <div class="data-container">
+                    <div class="data-controls">
+                        <div class="control-group">
+                            <label>选择站点</label>
+                            <select id="data-station">
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>时间范围</label>
+                            <select id="time-range">
+                                <option value="24">最近24小时</option>
+                                <option value="168">最近7天</option>
+                                <option value="720">最近30天</option>
+                                <option value="8760">最近1年</option>
+                            </select>
+                        </div>
+                        <button id="refresh-data" class="btn-primary">刷新数据</button>
+                    </div>
+                    <div class="data-charts">
+                        <div class="chart-card">
+                            <h4>水位变化</h4>
+                            <canvas id="water-level-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>流量变化</h4>
+                            <canvas id="flow-rate-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>含沙量变化</h4>
+                            <canvas id="sediment-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>河床高程变化</h4>
+                            <canvas id="bed-elevation-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="alert-toast" class="alert-toast hidden">
+        <div class="toast-content">
+            <h4 id="toast-title">新告警</h4>
+            <p id="toast-message">--</p>
+            <button onclick="closeToast()">关闭</button>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/visualization/three-scene.js"></script>
+    <script src="js/visualization/particles.js"></script>
+    <script src="js/visualization/terrain.js"></script>
+    <script src="js/visualization/structures.js"></script>
+    <script src="js/simulation/macha.js"></script>
+    <script src="js/simulation/bamboo.js"></script>
+    <script src="js/simulation/dem.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
