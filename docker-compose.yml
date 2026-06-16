@@ -1,0 +1,202 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.13.0-pg16
+    container_name: dujiangyan-timescaledb
+    environment:
+      POSTGRES_USER: ${DB_USER:-dujiangyan}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dujiangyan123}
+      POSTGRES_DB: ${DB_NAME:-dujiangyan}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./scripts/init_timescaledb.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./scripts/timescaledb_retention.sql:/docker-entrypoint-initdb.d/02_retention.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dujiangyan} -d ${DB_NAME:-dujiangyan}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.18
+    container_name: dujiangyan-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$SYS/broker/uptime", "-C", "1", "-W", "2"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dujiangyan-server
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-dujiangyan}
+      DB_PASSWORD: ${DB_PASSWORD:-dujiangyan123}
+      DB_NAME: ${DB_NAME:-dujiangyan}
+      DB_SSLMODE: disable
+      MQTT_BROKER: tcp://mosquitto:1883
+      MQTT_CLIENT_ID: dujiangyan-backend-docker
+      GIN_MODE: release
+      TZ: Asia/Shanghai
+      CRAFT_CONFIG_PATH: /app/config/craft_params.json
+      SEDIMENT_CONFIG_PATH: /app/config/sediment_params.json
+    ports:
+      - "8080:8080"
+      - "6060:6060"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: dujiangyan-simulator
+    environment:
+      TZ: Asia/Shanghai
+    command: >
+      -api http://server:8080/api/v1
+      -interval 1s
+      -speed 3600
+      -scenario normal
+    depends_on:
+      server:
+        condition: service_started
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+    profiles:
+      - simulator
+
+  simulator-flood:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: dujiangyan-simulator-flood
+    environment:
+      TZ: Asia/Shanghai
+    command: >
+      -api http://server:8080/api/v1
+      -interval 1s
+      -speed 3600
+      -scenario flood
+      -water-level-bonus 3.5
+      -sediment-bonus 2.5
+    depends_on:
+      server:
+        condition: service_started
+    networks:
+      - dujiangyan-net
+    profiles:
+      - flood
+
+  simulator-drought:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: dujiangyan-simulator-drought
+    environment:
+      TZ: Asia/Shanghai
+    command: >
+      -api http://server:8080/api/v1
+      -interval 2s
+      -speed 7200
+      -scenario drought
+      -water-level-bonus -2.0
+      -sediment-bonus 0.3
+    depends_on:
+      server:
+        condition: service_started
+    networks:
+      - dujiangyan-net
+    profiles:
+      - drought
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: dujiangyan-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - server
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+    profiles:
+      - nginx
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: dujiangyan-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: dujiangyan-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - dujiangyan-net
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  timescaledb_data:
+  mqtt_data:
+  mqtt_log:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  dujiangyan-net:
+    driver: bridge

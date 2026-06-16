@@ -8,5 +8,6 @@ require (
 	github.com/joho/godotenv v1.5.1
 	eclipse.org/paho.mqtt.golang v1.4.3
 	github.com/gorilla/websocket v1.5.1
+	github.com/prometheus/client_golang v1.18.0
 	gonum.org/v1/gonum v0.14.0
 )

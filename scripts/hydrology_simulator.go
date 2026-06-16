@@ -17,14 +17,14 @@ import (
 )
 
 type StationConfig struct {
-	StationID       string  `json:"station_id"`
-	StationName     string  `json:"station_name"`
-	BaseWaterLevel  float64 `json:"base_water_level"`
-	BaseFlowRate    float64 `json:"base_flow_rate"`
-	BaseSediment    float64 `json:"base_sediment"`
+	StationID        string  `json:"station_id"`
+	StationName      string  `json:"station_name"`
+	BaseWaterLevel   float64 `json:"base_water_level"`
+	BaseFlowRate     float64 `json:"base_flow_rate"`
+	BaseSediment     float64 `json:"base_sediment"`
 	BaseBedElevation float64 `json:"base_bed_elevation"`
-	FlowVariation   float64 `json:"flow_variation"`
-	SedimentTrend   float64 `json:"sediment_trend"`
+	FlowVariation    float64 `json:"flow_variation"`
+	SedimentTrend    float64 `json:"sediment_trend"`
 }
 
 type HydrologyData struct {
@@ -40,17 +40,109 @@ type HydrologyData struct {
 	SensorStatus          int       `json:"sensor_status"`
 }
 
-type Simulator struct {
-	apiBaseURL  string
-	interval    time.Duration
-	stations    []StationConfig
-	bedState    map[string]float64
-	accumulatedDeposition map[string]float64
-	startTime   time.Time
-	speedFactor float64
+type ScenarioPreset struct {
+	Name               string  `json:"name"`
+	Description        string  `json:"description"`
+	WaterLevelBonus    float64 `json:"water_level_bonus"`
+	FlowRateMultiplier float64 `json:"flow_rate_multiplier"`
+	SedimentBonus      float64 `json:"sediment_bonus"`
+	SedimentMultiplier float64 `json:"sediment_multiplier"`
+	RainfallBonus      float64 `json:"rainfall_bonus"`
+	BedElevationStart  float64 `json:"bed_elevation_start"`
+	DepositionRate     float64 `json:"deposition_rate"`
+	StormFrequency     float64 `json:"storm_frequency"`
 }
 
-var stations = []StationConfig{
+var scenarioPresets = map[string]ScenarioPreset{
+	"normal": {
+		Name:               "normal",
+		Description:        "平水期 - 正常水文条件",
+		WaterLevelBonus:    0.0,
+		FlowRateMultiplier: 1.0,
+		SedimentBonus:      0.0,
+		SedimentMultiplier: 1.0,
+		RainfallBonus:      0.0,
+		BedElevationStart:  0.0,
+		DepositionRate:     1.0,
+		StormFrequency:     0.02,
+	},
+	"flood": {
+		Name:               "flood",
+		Description:        "丰水期/洪水 - 高水位、大流量、高含沙量",
+		WaterLevelBonus:    3.0,
+		FlowRateMultiplier: 2.0,
+		SedimentBonus:      1.5,
+		SedimentMultiplier: 2.5,
+		RainfallBonus:      30.0,
+		BedElevationStart:  0.5,
+		DepositionRate:     3.0,
+		StormFrequency:     0.15,
+	},
+	"drought": {
+		Name:               "drought",
+		Description:        "枯水期 - 低水位、小流量、低含沙量",
+		WaterLevelBonus:    -2.5,
+		FlowRateMultiplier: 0.4,
+		SedimentBonus:      -0.3,
+		SedimentMultiplier: 0.5,
+		RainfallBonus:      -5.0,
+		BedElevationStart:  0.0,
+		DepositionRate:     0.3,
+		StormFrequency:     0.005,
+	},
+	"maintenance": {
+		Name:               "maintenance",
+		Description:        "岁修期 - 截流后低水位、河床冲刷",
+		WaterLevelBonus:    -4.0,
+		FlowRateMultiplier: 0.15,
+		SedimentBonus:      -0.5,
+		SedimentMultiplier: 0.3,
+		RainfallBonus:      0.0,
+		BedElevationStart:  1.0,
+		DepositionRate:     -0.5,
+		StormFrequency:     0.01,
+	},
+	"high_sediment": {
+		Name:               "high_sediment",
+		Description:        "高含沙期 - 模拟汛期泥沙大量下泄",
+		WaterLevelBonus:    1.0,
+		FlowRateMultiplier: 1.2,
+		SedimentBonus:      3.0,
+		SedimentMultiplier: 4.0,
+		RainfallBonus:      10.0,
+		BedElevationStart:  0.8,
+		DepositionRate:     5.0,
+		StormFrequency:     0.08,
+	},
+	"erosion": {
+		Name:               "erosion",
+		Description:        "冲刷期 - 大流量低含沙，河床下切",
+		WaterLevelBonus:    2.0,
+		FlowRateMultiplier: 1.8,
+		SedimentBonus:      -0.2,
+		SedimentMultiplier: 0.8,
+		RainfallBonus:      20.0,
+		BedElevationStart:  0.0,
+		DepositionRate:     -2.0,
+		StormFrequency:     0.1,
+	},
+}
+
+type Simulator struct {
+	apiBaseURL   string
+	interval     time.Duration
+	stations     []StationConfig
+	bedState     map[string]float64
+	accumulated  map[string]float64
+	startTime    time.Time
+	speedFactor  float64
+	scenario     ScenarioPreset
+	waterBonus   float64
+	sedimentBonus float64
+	flowMultiplier float64
+}
+
+var baseStations = []StationConfig{
 	{StationID: "NEIJ-001", StationName: "内江进水口", BaseWaterLevel: 728.5, BaseFlowRate: 250, BaseSediment: 0.8, BaseBedElevation: 726.5, FlowVariation: 100, SedimentTrend: 0.00002},
 	{StationID: "NEIJ-002", StationName: "内江中段", BaseWaterLevel: 727.8, BaseFlowRate: 220, BaseSediment: 0.75, BaseBedElevation: 725.8, FlowVariation: 90, SedimentTrend: 0.000025},
 	{StationID: "NEIJ-003", StationName: "宝瓶口上游", BaseWaterLevel: 728.2, BaseFlowRate: 180, BaseSediment: 0.65, BaseBedElevation: 726.2, FlowVariation: 70, SedimentTrend: 0.00003},
@@ -61,23 +153,55 @@ var stations = []StationConfig{
 	{StationID: "RJK-001", StationName: "人字堤", BaseWaterLevel: 727.5, BaseFlowRate: 40, BaseSediment: 0.5, BaseBedElevation: 726.3, FlowVariation: 20, SedimentTrend: 0.000015},
 }
 
-func NewSimulator(apiBaseURL string, interval time.Duration, speedFactor float64) *Simulator {
-	bedState := make(map[string]float64)
-	accumulatedDeposition := make(map[string]float64)
+func listScenarios() {
+	fmt.Println("Available scenarios:")
+	fmt.Println("====================")
+	for name, s := range scenarioPresets {
+		fmt.Printf("  %-15s %s\n", name, s.Description)
+	}
+	fmt.Println("")
+}
 
-	for _, s := range stations {
-		bedState[s.StationID] = s.BaseBedElevation
-		accumulatedDeposition[s.StationID] = 0
+func NewSimulator(apiBaseURL string, interval time.Duration, speedFactor float64,
+	scenarioName string, waterBonus, sedimentBonus, flowMultiplier float64) *Simulator {
+
+	scenario, ok := scenarioPresets[scenarioName]
+	if !ok {
+		log.Printf("Warning: Unknown scenario '%s', using 'normal'", scenarioName)
+		scenario = scenarioPresets["normal"]
+	}
+
+	if waterBonus != 0 {
+		scenario.WaterLevelBonus = waterBonus
+	}
+	if sedimentBonus != 0 {
+		scenario.SedimentBonus = sedimentBonus
+	}
+	if flowMultiplier != 0 && flowMultiplier != 1.0 {
+		scenario.FlowRateMultiplier = flowMultiplier
+	}
+
+	bedState := make(map[string]float64)
+	accumulated := make(map[string]float64)
+
+	for _, s := range baseStations {
+		startElev := s.BaseBedElevation + scenario.BedElevationStart
+		bedState[s.StationID] = startElev
+		accumulated[s.StationID] = scenario.BedElevationStart
 	}
 
 	return &Simulator{
-		apiBaseURL:            apiBaseURL,
-		interval:              interval,
-		stations:              stations,
-		bedState:              bedState,
-		accumulatedDeposition: accumulatedDeposition,
-		startTime:             time.Now(),
-		speedFactor:           speedFactor,
+		apiBaseURL:     apiBaseURL,
+		interval:       interval,
+		stations:       baseStations,
+		bedState:       bedState,
+		accumulated:    accumulated,
+		startTime:      time.Now(),
+		speedFactor:    speedFactor,
+		scenario:       scenario,
+		waterBonus:     waterBonus,
+		sedimentBonus:  sedimentBonus,
+		flowMultiplier: flowMultiplier,
 	}
 }
 
@@ -85,51 +209,58 @@ func (s *Simulator) generateData(station StationConfig, simTime time.Time) Hydro
 	hourOfDay := float64(simTime.Hour())
 	dayOfYear := float64(simTime.YearDay())
 
+	sc := s.scenario
+
 	seasonalFactor := 1.0 + 0.5*math.Sin((dayOfYear-150)*2*math.Pi/365)
 	dailyFactor := 1.0 + 0.1*math.Sin((hourOfDay-6)*2*math.Pi/24)
 
-	flowRate := station.BaseFlowRate*seasonalFactor*dailyFactor +
+	flowRate := station.BaseFlowRate*sc.FlowRateMultiplier*seasonalFactor*dailyFactor +
 		rand.NormFloat64()*station.FlowVariation*0.1
-	if flowRate < 10 {
-		flowRate = 10
+	if flowRate < 5 {
+		flowRate = 5
 	}
 
-	waterLevel := station.BaseWaterLevel + (flowRate-station.BaseFlowRate)*0.003 +
+	waterLevel := station.BaseWaterLevel + sc.WaterLevelBonus +
+		(flowRate-station.BaseFlowRate*sc.FlowRateMultiplier)*0.003 +
 		rand.NormFloat64()*0.1
-	if waterLevel < station.BaseBedElevation+0.5 {
-		waterLevel = station.BaseBedElevation + 0.5
+	if waterLevel < station.BaseBedElevation+0.3 {
+		waterLevel = station.BaseBedElevation + 0.3
 	}
 
 	stormFactor := 0.0
 	rainfall := 0.0
-	if rand.Float64() < 0.02 {
-		rainfall = rand.Float64() * 50
+	if rand.Float64() < sc.StormFrequency {
+		rainfall = (rand.Float64()*50 + sc.RainfallBonus)
+		if rainfall < 0 {
+			rainfall = 0
+		}
 		stormFactor = rainfall / 50 * 0.5
 	}
 
-	sedimentBase := station.BaseSediment * seasonalFactor * (1 + stormFactor)
+	sedimentBase := (station.BaseSediment + sc.SedimentBonus) * sc.SedimentMultiplier * seasonalFactor * (1 + stormFactor)
 	sedimentConcentration := sedimentBase + rand.NormFloat64()*0.2
 	if sedimentConcentration < 0.01 {
 		sedimentConcentration = 0.01
 	}
 
 	timeElapsed := simTime.Sub(s.startTime).Hours() * s.speedFactor
-	deposition := station.SedimentTrend * timeElapsed * (sedimentConcentration / station.BaseSediment)
+	netDepositionRate := station.SedimentTrend * sc.DepositionRate
+	deposition := netDepositionRate * timeElapsed * (sedimentConcentration / station.BaseSediment)
 	erosion := 0.0
-	if flowRate > station.BaseFlowRate*1.5 {
-		erosion = (flowRate - station.BaseFlowRate*1.5) * 0.00001
+	if flowRate > station.BaseFlowRate*sc.FlowRateMultiplier*1.5 {
+		erosion = (flowRate - station.BaseFlowRate*sc.FlowRateMultiplier*1.5) * 0.00001
 	}
 
-	s.accumulatedDeposition[station.StationID] += deposition - erosion
+	s.accumulated[station.StationID] += deposition - erosion
 
-	newBedElevation := station.BaseBedElevation + s.accumulatedDeposition[station.StationID]
+	newBedElevation := station.BaseBedElevation + s.accumulated[station.StationID]
 
-	bedrockLimit := station.BaseBedElevation - 0.5
+	bedrockLimit := station.BaseBedElevation - 1.0
 	if newBedElevation < bedrockLimit {
 		newBedElevation = bedrockLimit
 	}
 
-	maxLimit := 732.0
+	maxLimit := 733.0
 	if newBedElevation > maxLimit {
 		newBedElevation = maxLimit
 	}
@@ -164,7 +295,7 @@ func (s *Simulator) sendData(data HydrologyData) error {
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/hydrology/data", s.apiBaseURL)
+	url := fmt.Sprintf("%s/hydrology/data", s.apiBaseURL)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		return fmt.Errorf("failed to send data: %w", err)
@@ -232,14 +363,58 @@ func (s *Simulator) Run(ctx context.Context) {
 				}
 			}
 
-			log.Printf("[%s] Sent %d/%d stations | Sim time: %s | Bed elevation range: %.3fm - %.3fm",
+			log.Printf("[%s] Sent %d/%d | Scenario: %s | Sim: %s | WL: %.2fm | Sed: %.3f | Bed: %.3f",
 				time.Now().Format("15:04:05"),
 				totalSent, len(s.stations),
-				simTime.Format("2006-01-02 15:04:05"),
-				s.getMinBedElevation(), s.getMaxBedElevation(),
+				s.scenario.Name,
+				simTime.Format("2006-01-02 15:04"),
+				s.getAvgWaterLevel(),
+				s.getAvgSediment(),
+				s.getAvgBedElevation(),
 			)
 		}
 	}
+}
+
+func (s *Simulator) getAvgWaterLevel() float64 {
+	sum := 0.0
+	count := 0
+	for _, st := range s.stations {
+		elev := st.BaseWaterLevel + s.scenario.WaterLevelBonus
+		sum += elev
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func (s *Simulator) getAvgSediment() float64 {
+	sum := 0.0
+	count := 0
+	for _, st := range s.stations {
+		sed := (st.BaseSediment + s.scenario.SedimentBonus) * s.scenario.SedimentMultiplier
+		sum += sed
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func (s *Simulator) getAvgBedElevation() float64 {
+	sum := 0.0
+	count := 0
+	for _, v := range s.bedState {
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
 }
 
 func (s *Simulator) getMinBedElevation() float64 {
@@ -263,11 +438,21 @@ func (s *Simulator) getMaxBedElevation() float64 {
 }
 
 func main() {
-	apiBaseURL := flag.String("api", "http://localhost:8080", "API server base URL")
+	apiBaseURL := flag.String("api", "http://localhost:8080/api/v1", "API server base URL")
 	interval := flag.Duration("interval", 1*time.Second, "Simulation tick interval")
 	speedFactor := flag.Float64("speed", 1.0, "Simulation speed factor (hours per tick)")
 	historicalDays := flag.Int("historical", 0, "Generate N days of historical data first")
+	scenario := flag.String("scenario", "normal", "Scenario preset (normal, flood, drought, maintenance, high_sediment, erosion)")
+	waterLevelBonus := flag.Float64("water-level-bonus", 0, "Water level bonus in meters (overrides scenario)")
+	sedimentBonus := flag.Float64("sediment-bonus", 0, "Sediment concentration bonus in kg/m^3 (overrides scenario)")
+	flowMultiplier := flag.Float64("flow-multiplier", 1.0, "Flow rate multiplier (overrides scenario)")
+	listScenariosFlag := flag.Bool("list-scenarios", false, "List all available scenarios and exit")
 	flag.Parse()
+
+	if *listScenariosFlag {
+		listScenarios()
+		os.Exit(0)
+	}
 
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -279,12 +464,28 @@ func main() {
 	log.Printf("Interval: %s", *interval)
 	log.Printf("Speed Factor: %.1fx (%.1f hours per tick)", *speedFactor, *speedFactor)
 	log.Printf("Historical Data: %d days", *historicalDays)
-	log.Printf("Stations: %d", len(stations))
+	log.Printf("Scenario: %s", *scenario)
+	if *waterLevelBonus != 0 {
+		log.Printf("Water Level Bonus: %.2fm", *waterLevelBonus)
+	}
+	if *sedimentBonus != 0 {
+		log.Printf("Sediment Bonus: %.3f kg/m^3", *sedimentBonus)
+	}
+	if *flowMultiplier != 1.0 {
+		log.Printf("Flow Multiplier: %.2fx", *flowMultiplier)
+	}
+	log.Printf("Stations: %d", len(baseStations))
+	log.Println("============================================")
+
+	if s, ok := scenarioPresets[*scenario]; ok {
+		log.Printf("Scenario description: %s", s.Description)
+	}
 	log.Println("============================================")
 
 	rand.Seed(time.Now().UnixNano())
 
-	simulator := NewSimulator(*apiBaseURL, *interval, *speedFactor)
+	simulator := NewSimulator(*apiBaseURL, *interval, *speedFactor,
+		*scenario, *waterLevelBonus, *sedimentBonus, *flowMultiplier)
 
 	if *historicalDays > 0 {
 		if err := simulator.sendHistoricalData(*historicalDays); err != nil {

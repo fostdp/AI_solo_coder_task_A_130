@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"dujiangyan-system/pkg/alarm_mqtt"
 	"dujiangyan-system/pkg/dtu_receiver"
 	"dujiangyan-system/pkg/maintenance_simulator"
+	"dujiangyan-system/pkg/metrics"
 	"dujiangyan-system/pkg/models"
 	"dujiangyan-system/pkg/msg"
 	"dujiangyan-system/pkg/riverbed_analyzer"
@@ -101,11 +103,19 @@ func main() {
 	go app.startBusDispatcher()
 	go app.startWebSocketBroadcaster()
 
-	gin.SetMode(gin.ReleaseMode)
+	_ = metrics.GetMetrics()
+
+	ginMode := os.Getenv("GIN_MODE")
+	if ginMode != "" {
+		gin.SetMode(ginMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(app.corsMiddleware())
+	r.Use(metrics.PrometheusMiddleware())
 
 	app.registerRoutes(r)
 
@@ -121,11 +131,27 @@ func main() {
 
 	server := &http.Server{Addr: addr, Handler: r}
 
+	pprofPort := os.Getenv("PPROF_PORT")
+	if pprofPort == "" {
+		pprofPort = "6060"
+	}
+	pprofAddr := host + ":" + pprofPort
+	pprofServer := &http.Server{Addr: pprofAddr, Handler: http.DefaultServeMux}
+
 	go func() {
 		log.Printf("Server starting on %s", addr)
 		log.Printf("API: http://%s/api/v1", addr)
+		log.Printf("Metrics: http://%s/metrics", addr)
+		log.Printf("pprof: http://%s/debug/pprof/", pprofAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	go func() {
+		log.Printf("pprof server starting on %s", pprofAddr)
+		if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("pprof server stopped: %v", err)
 		}
 	}()
 
@@ -135,6 +161,10 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
+	if err := pprofServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("pprof server forced to shutdown: %v", err)
+	}
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
@@ -143,17 +173,20 @@ func main() {
 }
 
 func (app *Application) startBusDispatcher() {
+	m := metrics.GetMetrics()
 	for {
 		select {
 		case <-app.ctx.Done():
 			return
 		case message := <-app.bus:
+			m.BusMessagesTotal.WithLabelValues(message.Type, "received").Inc()
 			switch message.Type {
 			case msg.TypeHydrologyData:
 				select {
 				case app.alarmBus <- message:
 				default:
 					log.Printf("Alarm bus full, dropping hydrology message")
+					m.BusMessagesDropped.WithLabelValues(message.Type, "alarm_bus_full").Inc()
 				}
 				app.wsBroadcast <- message
 			case msg.TypeSimResult:
@@ -166,12 +199,15 @@ func (app *Application) startBusDispatcher() {
 }
 
 func (app *Application) startWebSocketBroadcaster() {
+	m := metrics.GetMetrics()
 	for {
 		select {
 		case <-app.ctx.Done():
 			return
 		case message := <-app.wsBroadcast:
 			app.wsMu.RLock()
+			count := len(app.wsClients)
+			m.WebSocketConnections.Set(float64(count))
 			for client := range app.wsClients {
 				if err := client.WriteJSON(message); err != nil {
 					go func(c *websocket.Conn) {
@@ -180,6 +216,8 @@ func (app *Application) startWebSocketBroadcaster() {
 						app.wsMu.Unlock()
 						c.Close()
 					}(client)
+				} else {
+					m.WebSocketMessagesSent.Inc()
 				}
 			}
 			app.wsMu.RUnlock()
@@ -222,6 +260,8 @@ func (app *Application) handleWebSocket(c *gin.Context) {
 }
 
 func (app *Application) registerRoutes(r *gin.Engine) {
+	r.GET("/metrics", gin.WrapH(metrics.GetMetrics().Handler()))
+
 	v1 := r.Group("/api/v1")
 	{
 		v1.POST("/hydrology/data", app.dtu.HandleReceive)
@@ -260,6 +300,10 @@ func (app *Application) handleBambooCageSimulation(c *gin.Context) {
 		return
 	}
 
+	m := metrics.GetMetrics()
+	m.SimulationsStarted.WithLabelValues("bamboo_cage").Inc()
+	startTime := time.Now()
+
 	now := time.Now()
 	endTime := now.Add(24 * time.Hour)
 	simRecord := &models.AnnualRepairSimulation{
@@ -285,10 +329,15 @@ func (app *Application) handleBambooCageSimulation(c *gin.Context) {
 	}
 
 	cages, err := app.simulator.RunBambooCageSimulation(simReq)
+	duration := time.Since(startTime).Seconds()
+	m.SimulationDuration.WithLabelValues("bamboo_cage").Observe(duration)
 	if err != nil {
+		m.SimulationsFailed.WithLabelValues("bamboo_cage").Inc()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	m.SimulationsCompleted.WithLabelValues("bamboo_cage").Inc()
 
 	c.JSON(http.StatusOK, gin.H{
 		"simulation_id": simRecord.ID,
@@ -311,6 +360,10 @@ func (app *Application) handleMachaInterceptionSimulation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	m := metrics.GetMetrics()
+	m.SimulationsStarted.WithLabelValues("macha_interception").Inc()
+	startTime := time.Now()
 
 	now := time.Now()
 	endTime := now.Add(48 * time.Hour)
@@ -339,10 +392,15 @@ func (app *Application) handleMachaInterceptionSimulation(c *gin.Context) {
 	}
 
 	machas, interceptionData, err := app.simulator.RunMachaInterception(simReq)
+	duration := time.Since(startTime).Seconds()
+	m.SimulationDuration.WithLabelValues("macha_interception").Observe(duration)
 	if err != nil {
+		m.SimulationsFailed.WithLabelValues("macha_interception").Inc()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	m.SimulationsCompleted.WithLabelValues("macha_interception").Inc()
 
 	c.JSON(http.StatusOK, gin.H{
 		"simulation_id":      simRecord.ID,
@@ -363,11 +421,20 @@ func (app *Application) handleBedEvolutionPrediction(c *gin.Context) {
 		return
 	}
 
+	m := metrics.GetMetrics()
+	m.PredictionsStarted.Inc()
+	startTime := time.Now()
+
 	results, err := app.analyzer.PredictBedEvolution(req.StationID, req.Years)
+	duration := time.Since(startTime).Seconds()
+	m.PredictionDuration.Observe(duration)
 	if err != nil {
+		m.PredictionsFailed.Inc()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	m.PredictionsCompleted.Inc()
 
 	if len(results) == 0 {
 		c.JSON(http.StatusOK, gin.H{"predictions": []interface{}{}})

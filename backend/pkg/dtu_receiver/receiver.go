@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"dujiangyan-system/pkg/metrics"
 	"dujiangyan-system/pkg/models"
 	"dujiangyan-system/pkg/msg"
 	"dujiangyan-system/pkg/simulation"
@@ -101,16 +102,21 @@ func (r *DTUReceiver) ValidateRange(data *models.HydrologyData) error {
 func (r *DTUReceiver) HandleReceive(c *gin.Context) {
 	var req HydrologyDataRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		metrics.GetMetrics().HydrologyDataErrors.WithLabelValues("unknown", "parse_error").Inc()
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	m := metrics.GetMetrics()
+
 	if err := r.ValidateStationID(req.StationID); err != nil {
+		m.HydrologyDataErrors.WithLabelValues(req.StationID, "invalid_station").Inc()
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	if err := r.CheckRateLimit(req.StationID); err != nil {
+		m.HydrologyDataErrors.WithLabelValues(req.StationID, "rate_limit").Inc()
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 		return
 	}
@@ -137,14 +143,25 @@ func (r *DTUReceiver) HandleReceive(c *gin.Context) {
 	}
 
 	if err := r.ValidateRange(data); err != nil {
+		m.HydrologyDataErrors.WithLabelValues(req.StationID, "out_of_range").Inc()
 		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed: " + err.Error()})
 		return
 	}
 
 	if err := models.InsertHydrologyData(r.ctx, data); err != nil {
+		m.HydrologyDataErrors.WithLabelValues(req.StationID, "db_error").Inc()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert data: " + err.Error()})
 		return
 	}
+
+	m.HydrologyDataReceived.WithLabelValues(req.StationID, "water_level").Inc()
+	m.HydrologyDataReceived.WithLabelValues(req.StationID, "flow_rate").Inc()
+	m.HydrologyDataReceived.WithLabelValues(req.StationID, "sediment").Inc()
+	m.HydrologyDataReceived.WithLabelValues(req.StationID, "bed_elevation").Inc()
+	m.LatestWaterLevel.WithLabelValues(req.StationID).Set(data.WaterLevel)
+	m.LatestSedimentConcentration.WithLabelValues(req.StationID).Set(data.SedimentConcentration)
+	m.LatestFlowRate.WithLabelValues(req.StationID).Set(data.FlowRate)
+	m.LatestBedElevation.WithLabelValues(req.StationID).Set(data.BedElevation)
 
 	r.bus <- msg.BusMessage{
 		Type:      msg.TypeHydrologyData,

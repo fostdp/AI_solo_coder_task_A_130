@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1.6
+
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GOARCH=amd64
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN go build -trimpath \
+    -ldflags="-s -w -extldflags '-static'" \
+    -o /app/hydrology-simulator \
+    ./scripts/hydrology_simulator.go
+
+FROM scratch
+
+WORKDIR /app
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /app/hydrology-simulator /usr/local/bin/hydrology-simulator
+
+ENV TZ=Asia/Shanghai
+
+ENTRYPOINT ["/usr/local/bin/hydrology-simulator"]
+CMD ["-api", "http://server:8080/api/v1", "-interval", "1s", "-speed", "3600"]
