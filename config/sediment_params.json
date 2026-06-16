@@ -1,0 +1,61 @@
+{
+  "sediment_transport": {
+    "K": 0.01,
+    "exponent_flow": 2.0,
+    "exponent_slope": 1.5,
+    "porosity": 0.4,
+    "bulk_density": 2650.0,
+    "time_step_years": 1.0
+  },
+  "weirs": [
+    {
+      "name": "飞沙堰",
+      "weir_type": "overflow",
+      "crest_elevation": 728.0,
+      "weir_length": 120.0,
+      "discharge_coeff": 0.45,
+      "submergence_ratio": 0.0,
+      "backwater_factor": 0.15,
+      "sediment_trap_eff": 0.35,
+      "release_threshold": 730.0,
+      "upstream_stations": ["NEIJ-001", "NEIJ-002", "WAIJ-001", "WAIJ-002", "FSSY-001"]
+    },
+    {
+      "name": "宝瓶口",
+      "weir_type": "orifice",
+      "crest_elevation": 727.0,
+      "weir_length": 20.0,
+      "discharge_coeff": 0.62,
+      "submergence_ratio": 0.0,
+      "backwater_factor": 0.25,
+      "sediment_trap_eff": 0.20,
+      "release_threshold": 731.0,
+      "upstream_stations": ["NEIJ-001", "NEIJ-002", "NEIJ-003", "FSSY-001", "FSSY-002"]
+    },
+    {
+      "name": "人字堤",
+      "weir_type": "overflow",
+      "crest_elevation": 727.5,
+      "weir_length": 80.0,
+      "discharge_coeff": 0.40,
+      "submergence_ratio": 0.0,
+      "backwater_factor": 0.10,
+      "sediment_trap_eff": 0.15,
+      "release_threshold": 729.5,
+      "upstream_stations": ["NEIJ-001", "NEIJ-002", "NEIJ-003", "RJK-001"]
+    }
+  ],
+  "prediction": {
+    "default_years": 10,
+    "min_history_months": 24,
+    "seasonal_cycle_years": 10,
+    "seasonal_amplitude": 0.3,
+    "confidence_decay_per_year": 0.03,
+    "min_confidence": 0.6,
+    "base_confidence": 0.95
+  },
+  "evolution_rate": {
+    "deposition_ratio_upstream": 1.1,
+    "bedrock_offset": 0.5
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "dem": {
+    "gravity": -9.81,
+    "restitution": 0.3,
+    "friction": 0.6,
+    "viscosity": 0.98,
+    "time_step": 0.01,
+    "spatial_hash_cell_size": 2.0,
+    "max_workers": 8,
+    "collision_impulse_scale": 1.0
+  },
+  "bamboo_cage": {
+    "default_diameter": 0.9,
+    "default_length": 2.4,
+    "porosity": 0.35,
+    "stone_count_per_cage": 100,
+    "stone_radius_range": [0.04, 0.12],
+    "stone_density": 2650,
+    "cage_spacing": 1.2,
+    "cages_per_row": 5,
+    "convergence_steps": 500
+  },
+  "macha": {
+    "default_height": 4.5,
+    "default_angle": 15.0,
+    "angle_increment": 2.0,
+    "log_count_range": [6, 10],
+    "binding_strength": 0.8,
+    "base_efficiency": 0.05,
+    "efficiency_increment": 0.02,
+    "max_efficiency": 0.85,
+    "spacing": 3.0
+  },
+  "terrain": {
+    "base_elevation": 726.5,
+    "grid_size": 100,
+    "resolution": 2,
+    "channel_width": 50.0,
+    "channel_length": 1000.0,
+    "slope": 0.001
+  }
+}

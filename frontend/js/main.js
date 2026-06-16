@@ -1,6 +1,6 @@
 let mainScene = null;
 let miniScene = null;
-let particleSystem = null;
+let riverbedPanel = null;
 let wsClient = null;
 let currentTab = 'overview';
 let currentSubTab = 'macha';
@@ -22,7 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     setTimeout(() => {
         initThreeScenes();
-        initParticleSystem();
     }, 100);
     
     setInterval(updateSystemTime, 1000);
@@ -51,7 +50,7 @@ function switchTab(tabName) {
     
     if (tabName === '3d-view') {
         setTimeout(() => {
-            if (mainScene) mainScene.handleResize();
+            if (mainScene) mainScene.resize();
         }, 100);
     } else if (tabName === 'repair') {
         if (currentSubTab === 'macha') {
@@ -60,7 +59,7 @@ function switchTab(tabName) {
             initBambooSimulation();
         }
     } else if (tabName === 'evolution') {
-        initDEMRenderer();
+        initRiverbedPanel();
     } else if (tabName === 'data') {
         loadStationOptions();
     } else if (tabName === 'alerts') {
@@ -120,8 +119,8 @@ function initLayerControls() {
     const waterScale = document.getElementById('water-scale');
     if (waterScale) {
         waterScale.addEventListener('input', (e) => {
-            if (particleSystem) {
-                particleSystem.setWaterScale(parseFloat(e.target.value));
+            if (mainScene && mainScene.waterSystem) {
+                mainScene.waterSystem.setWaterScale(parseFloat(e.target.value));
             }
         });
     }
@@ -129,8 +128,8 @@ function initLayerControls() {
     const particleCount = document.getElementById('particle-count');
     if (particleCount) {
         particleCount.addEventListener('input', (e) => {
-            if (particleSystem) {
-                particleSystem.setParticleCount(parseInt(e.target.value));
+            if (mainScene && mainScene.waterSystem) {
+                mainScene.waterSystem.setParticleCount(parseInt(e.target.value));
             }
         });
     }
@@ -141,8 +140,8 @@ function initViewPresets() {
     presetBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const view = btn.textContent.trim();
-            if (mainScene && CONFIG.VIEWS[view]) {
-                mainScene.setView(CONFIG.VIEWS[view]);
+            if (mainScene) {
+                mainScene.setViewPreset(view);
             }
         });
     });
@@ -396,34 +395,23 @@ function initThreeScenes() {
         const miniContainer = document.getElementById('mini-3d-container');
         
         if (mainContainer) {
-            mainScene = new DujiangyanScene('three-container', false);
-            mainScene.initMainScene();
+            mainScene = new Dujiangyan3D('three-container');
+            mainScene.init();
         }
         
         if (miniContainer) {
-            miniScene = new DujiangyanScene('mini-3d-container', true);
-            miniScene.initMiniScene();
+            miniScene = new Dujiangyan3D('mini-3d-container');
+            miniScene.init();
         }
     } catch (error) {
         console.error('Three.js场景初始化失败:', error);
     }
 }
 
-function initParticleSystem() {
-    try {
-        if (mainScene && mainScene.scene) {
-            particleSystem = new WaterParticleSystem(mainScene.scene, mainScene.renderer);
-            particleSystem.init();
-            mainScene.addToLayer('water', particleSystem.getMesh());
-            
-            mainScene.addUpdateCallback(() => {
-                if (particleSystem) {
-                    particleSystem.update();
-                }
-            });
-        }
-    } catch (error) {
-        console.error('粒子系统初始化失败:', error);
+function initRiverbedPanel() {
+    if (!riverbedPanel) {
+        riverbedPanel = new RiverbedPanel();
+        riverbedPanel.init();
     }
 }
 
@@ -1016,11 +1004,11 @@ function renderRepairRecords(records) {
 }
 
 function handleResize() {
-    if (mainScene) mainScene.handleResize();
-    if (miniScene) miniScene.handleResize();
-    if (demRenderer) demRenderer.resize();
-    if (machaSim) machaSim.initCanvas();
-    if (bambooSim) bambooSim.initCanvas();
+    if (mainScene) mainScene.resize();
+    if (miniScene) miniScene.resize();
+    if (riverbedPanel) riverbedPanel.resize();
+    if (typeof machaSim !== 'undefined' && machaSim) machaSim.initCanvas();
+    if (typeof bambooSim !== 'undefined' && bambooSim) bambooSim.initCanvas();
     
     Object.values(charts).forEach(chart => {
         if (chart.resize) chart.resize();
@@ -1030,7 +1018,7 @@ function handleResize() {
 }
 
 function setView(viewName) {
-    if (mainScene && CONFIG.VIEWS[viewName]) {
-        mainScene.setView(CONFIG.VIEWS[viewName]);
+    if (mainScene) {
+        mainScene.setViewPreset(viewName);
     }
 }
