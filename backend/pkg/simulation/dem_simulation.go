@@ -5,46 +5,125 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"runtime"
+	"sync"
 	"time"
 
 	"dujiangyan-system/pkg/models"
 )
 
 type StoneParticle struct {
-	ID       int       `json:"id"`
-	PositionX float64   `json:"position_x"`
-	PositionY float64   `json:"position_y"`
-	PositionZ float64   `json:"position_z"`
-	VelocityX float64   `json:"velocity_x"`
-	VelocityY float64   `json:"velocity_y"`
-	VelocityZ float64   `json:"velocity_z"`
-	Radius   float64   `json:"radius"`
-	Mass     float64   `json:"mass"`
-	Fixed    bool      `json:"fixed"`
+	ID        int     `json:"id"`
+	PositionX float64 `json:"position_x"`
+	PositionY float64 `json:"position_y"`
+	PositionZ float64 `json:"position_z"`
+	VelocityX float64 `json:"velocity_x"`
+	VelocityY float64 `json:"velocity_y"`
+	VelocityZ float64 `json:"velocity_z"`
+	Radius    float64 `json:"radius"`
+	Mass      float64 `json:"mass"`
+	Fixed     bool    `json:"fixed"`
 }
 
 type BambooCage struct {
-	CageID     string         `json:"cage_id"`
-	PositionX  float64        `json:"position_x"`
-	PositionY  float64        `json:"position_y"`
-	PositionZ  float64        `json:"position_z"`
-	Diameter   float64        `json:"diameter"`
-	Length     float64        `json:"length"`
-	Porosity   float64        `json:"porosity"`
-	Stones     []StoneParticle `json:"stones"`
-	Stability  float64        `json:"stability"`
+	CageID    string          `json:"cage_id"`
+	PositionX float64         `json:"position_x"`
+	PositionY float64         `json:"position_y"`
+	PositionZ float64         `json:"position_z"`
+	Diameter  float64         `json:"diameter"`
+	Length    float64         `json:"length"`
+	Porosity  float64         `json:"porosity"`
+	Stones    []StoneParticle `json:"stones"`
+	Stability float64         `json:"stability"`
 }
 
 type MachaStructure struct {
-	ID         int       `json:"id"`
-	PositionX  float64   `json:"position_x"`
-	PositionY  float64   `json:"position_y"`
-	PositionZ  float64   `json:"position_z"`
-	Height     float64   `json:"height"`
-	Angle      float64   `json:"angle"`
-	LogCount   int       `json:"log_count"`
+	ID              int     `json:"id"`
+	PositionX       float64 `json:"position_x"`
+	PositionY       float64 `json:"position_y"`
+	PositionZ       float64 `json:"position_z"`
+	Height          float64 `json:"height"`
+	Angle           float64 `json:"angle"`
+	LogCount        int     `json:"log_count"`
 	BindingStrength float64 `json:"binding_strength"`
-	Efficiency float64   `json:"efficiency"`
+	Efficiency      float64 `json:"efficiency"`
+}
+
+type collisionPair struct {
+	i, j   int
+	overlap float64
+	normal [3]float64
+}
+
+type SpatialHashGrid struct {
+	cellSize float64
+	cells    map[int64][]int
+}
+
+func newSpatialHashGrid(cellSize float64) *SpatialHashGrid {
+	return &SpatialHashGrid{
+		cellSize: cellSize,
+		cells:    make(map[int64][]int),
+	}
+}
+
+func (g *SpatialHashGrid) cellKey(cx, cy, cz int) int64 {
+	prime1 := int64(73856093)
+	prime2 := int64(19349663)
+	prime3 := int64(83492791)
+	return int64(cx)*prime1 ^ int64(cy)*prime2 ^ int64(cz)*prime3
+}
+
+func (g *SpatialHashGrid) clear() {
+	for k := range g.cells {
+		delete(g.cells, k)
+	}
+}
+
+func (g *SpatialHashGrid) insert(index int, px, py, pz, radius float64) {
+	minCX := int(math.Floor((px - radius) / g.cellSize))
+	minCY := int(math.Floor((py - radius) / g.cellSize))
+	minCZ := int(math.Floor((pz - radius) / g.cellSize))
+	maxCX := int(math.Floor((px + radius) / g.cellSize))
+	maxCY := int(math.Floor((py + radius) / g.cellSize))
+	maxCZ := int(math.Floor((pz + radius) / g.cellSize))
+
+	for cx := minCX; cx <= maxCX; cx++ {
+		for cy := minCY; cy <= maxCY; cy++ {
+			for cz := minCZ; cz <= maxCZ; cz++ {
+				key := g.cellKey(cx, cy, cz)
+				g.cells[key] = append(g.cells[key], index)
+			}
+		}
+	}
+}
+
+func (g *SpatialHashGrid) queryPotentialCollisions() []collisionPair {
+	seen := make(map[[2]int]bool)
+	var pairs []collisionPair
+
+	for _, indices := range g.cells {
+		n := len(indices)
+		if n < 2 {
+			continue
+		}
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				a, b := indices[i], indices[j]
+				if a > b {
+					a, b = b, a
+				}
+				key := [2]int{a, b}
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				pairs = append(pairs, collisionPair{i: a, j: b})
+			}
+		}
+	}
+
+	return pairs
 }
 
 type DEMSimulation struct {
@@ -57,9 +136,18 @@ type DEMSimulation struct {
 	Stones       []StoneParticle
 	Cages        []BambooCage
 	Machas       []MachaStructure
+	spatialGrid  *SpatialHashGrid
+	workers      int
 }
 
 func NewDEMSimulation(simID int64) *DEMSimulation {
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 8 {
+		workers = 8
+	}
 	return &DEMSimulation{
 		SimulationID: simID,
 		Gravity:      -9.81,
@@ -67,6 +155,8 @@ func NewDEMSimulation(simID int64) *DEMSimulation {
 		Friction:     0.6,
 		Viscosity:    0.98,
 		TimeStep:     0.01,
+		spatialGrid:  newSpatialHashGrid(2.0),
+		workers:      workers,
 	}
 }
 
@@ -115,6 +205,8 @@ func (s *DEMSimulation) CreateBambooCage(
 		cage.Stones = append(cage.Stones, s.Stones[stoneID])
 	}
 
+	s.spatialGrid.cellSize = math.Max(diameter*1.5, 2.0)
+
 	s.Cages = append(s.Cages, cage)
 	return &s.Cages[len(s.Cages)-1]
 }
@@ -145,10 +237,11 @@ func (s *DEMSimulation) detectCollision(i, j int) (bool, float64, [3]float64) {
 	dx := sj.PositionX - si.PositionX
 	dy := sj.PositionY - si.PositionY
 	dz := sj.PositionZ - si.PositionZ
-	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+	distanceSq := dx*dx + dy*dy + dz*dz
 	minDist := si.Radius + sj.Radius
 
-	if distance < minDist && distance > 0 {
+	if distanceSq < minDist*minDist && distanceSq > 0 {
+		distance := math.Sqrt(distanceSq)
 		overlap := minDist - distance
 		nx := dx / distance
 		ny := dy / distance
@@ -200,46 +293,128 @@ func (s *DEMSimulation) resolveCollision(i, j int, overlap float64, normal [3]fl
 	}
 }
 
-func (s *DEMSimulation) Step() {
-	for i := range s.Stones {
-		if s.Stones[i].Fixed {
+func (s *DEMSimulation) applyForcesParallel() {
+	n := len(s.Stones)
+	if n == 0 {
+		return
+	}
+
+	chunkSize := (n + s.workers - 1) / s.workers
+	var wg sync.WaitGroup
+
+	for w := 0; w < s.workers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > n {
+			end = n
+		}
+		if start >= end {
 			continue
 		}
 
-		s.Stones[i].VelocityZ += s.Gravity * s.TimeStep
+		wg.Add(1)
+		go func(startIdx, endIdx int) {
+			defer wg.Done()
+			for i := startIdx; i < endIdx; i++ {
+				if s.Stones[i].Fixed {
+					continue
+				}
 
-		s.Stones[i].VelocityX *= s.Viscosity
-		s.Stones[i].VelocityY *= s.Viscosity
-		s.Stones[i].VelocityZ *= s.Viscosity
+				s.Stones[i].VelocityZ += s.Gravity * s.TimeStep
 
-		s.Stones[i].PositionX += s.Stones[i].VelocityX * s.TimeStep
-		s.Stones[i].PositionY += s.Stones[i].VelocityY * s.TimeStep
-		s.Stones[i].PositionZ += s.Stones[i].VelocityZ * s.TimeStep
+				s.Stones[i].VelocityX *= s.Viscosity
+				s.Stones[i].VelocityY *= s.Viscosity
+				s.Stones[i].VelocityZ *= s.Viscosity
 
-		if s.Stones[i].PositionZ < s.Stones[i].Radius {
-			s.Stones[i].PositionZ = s.Stones[i].Radius
-			if s.Stones[i].VelocityZ < 0 {
-				s.Stones[i].VelocityZ = -s.Stones[i].VelocityZ * s.Restitution
+				s.Stones[i].PositionX += s.Stones[i].VelocityX * s.TimeStep
+				s.Stones[i].PositionY += s.Stones[i].VelocityY * s.TimeStep
+				s.Stones[i].PositionZ += s.Stones[i].VelocityZ * s.TimeStep
+
+				if s.Stones[i].PositionZ < s.Stones[i].Radius {
+					s.Stones[i].PositionZ = s.Stones[i].Radius
+					if s.Stones[i].VelocityZ < 0 {
+						s.Stones[i].VelocityZ = -s.Stones[i].VelocityZ * s.Restitution
+					}
+
+					frictionForce := s.Friction * s.Gravity * s.Stones[i].Mass * s.TimeStep
+					speed := math.Sqrt(s.Stones[i].VelocityX*s.Stones[i].VelocityX +
+						s.Stones[i].VelocityY*s.Stones[i].VelocityY)
+					if speed > 0 {
+						s.Stones[i].VelocityX -= (s.Stones[i].VelocityX / speed) * math.Min(frictionForce/s.Stones[i].Mass, speed)
+						s.Stones[i].VelocityY -= (s.Stones[i].VelocityY / speed) * math.Min(frictionForce/s.Stones[i].Mass, speed)
+					}
+				}
 			}
+		}(start, end)
+	}
 
-			frictionForce := s.Friction * s.Gravity * s.Stones[i].Mass * s.TimeStep
-			speed := math.Sqrt(s.Stones[i].VelocityX*s.Stones[i].VelocityX +
-				s.Stones[i].VelocityY*s.Stones[i].VelocityY)
-			if speed > 0 {
-				s.Stones[i].VelocityX -= (s.Stones[i].VelocityX / speed) * math.Min(frictionForce/s.Stones[i].Mass, speed)
-				s.Stones[i].VelocityY -= (s.Stones[i].VelocityY / speed) * math.Min(frictionForce/s.Stones[i].Mass, speed)
-			}
+	wg.Wait()
+}
+
+func (s *DEMSimulation) detectCollisionsSpatial() []collisionPair {
+	s.spatialGrid.clear()
+
+	for i := range s.Stones {
+		st := &s.Stones[i]
+		s.spatialGrid.insert(i, st.PositionX, st.PositionY, st.PositionZ, st.Radius)
+	}
+
+	potentialPairs := s.spatialGrid.queryPotentialCollisions()
+
+	var actualCollisions []collisionPair
+	for _, pair := range potentialPairs {
+		colliding, overlap, normal := s.detectCollision(pair.i, pair.j)
+		if colliding {
+			actualCollisions = append(actualCollisions, collisionPair{
+				i: pair.i, j: pair.j, overlap: overlap, normal: normal,
+			})
 		}
 	}
 
-	for i := 0; i < len(s.Stones); i++ {
-		for j := i + 1; j < len(s.Stones); j++ {
-			colliding, overlap, normal := s.detectCollision(i, j)
-			if colliding {
-				s.resolveCollision(i, j, overlap, normal)
-			}
-		}
+	return actualCollisions
+}
+
+func (s *DEMSimulation) resolveCollisionsParallel(collisions []collisionPair) {
+	if len(collisions) == 0 {
+		return
 	}
+
+	groupCount := s.workers
+	if groupCount > len(collisions) {
+		groupCount = len(collisions)
+	}
+	chunkSize := (len(collisions) + groupCount - 1) / groupCount
+
+	var wg sync.WaitGroup
+	for g := 0; g < groupCount; g++ {
+		start := g * chunkSize
+		end := start + chunkSize
+		if end > len(collisions) {
+			end = len(collisions)
+		}
+		if start >= end {
+			continue
+		}
+
+		wg.Add(1)
+		go func(startIdx, endIdx int) {
+			defer wg.Done()
+			for k := startIdx; k < endIdx; k++ {
+				c := collisions[k]
+				s.resolveCollision(c.i, c.j, c.overlap, c.normal)
+			}
+		}(start, end)
+	}
+
+	wg.Wait()
+}
+
+func (s *DEMSimulation) Step() {
+	s.applyForcesParallel()
+
+	collisions := s.detectCollisionsSpatial()
+
+	s.resolveCollisionsParallel(collisions)
 
 	for ci := range s.Cages {
 		s.updateCageStability(ci)
@@ -321,7 +496,7 @@ func SimulateBambooCagePlacement(
 		default:
 			cageID = "CAGE-"
 		}
-		cageID += string(rune('A' + row)) + string(rune('0' + col))
+		cageID += string(rune('A'+row)) + string(rune('0'+col))
 
 		cage := sim.CreateBambooCage(cageID, x, y, z, diameter, length, stoneCount)
 		sim.Run(500)
@@ -400,16 +575,16 @@ func SimulateMachaInterception(
 		newWaterLevel := currentWaterLevel + waterLevelRise
 
 		interceptionRecord := models.MachaInterceptionData{
-			Time:                  time.Now().Add(time.Duration(step) * time.Hour),
-			SimulationID:          int(simulationID),
-			PositionX:             x,
-			PositionY:             y,
-			WaterLevelBefore:      currentWaterLevel,
-			WaterLevelAfter:       newWaterLevel,
-			FlowRateBefore:        currentFlowRate,
-			FlowRateAfter:         newFlowRate,
+			Time:                   time.Now().Add(time.Duration(step) * time.Hour),
+			SimulationID:           int(simulationID),
+			PositionX:              x,
+			PositionY:              y,
+			WaterLevelBefore:       currentWaterLevel,
+			WaterLevelAfter:        newWaterLevel,
+			FlowRateBefore:         currentFlowRate,
+			FlowRateAfter:          newFlowRate,
 			InterceptionEfficiency: efficiency * 100,
-			MachaCount:            step + 1,
+			MachaCount:             step + 1,
 		}
 
 		if err := models.InsertMachaInterceptionData(ctx, &interceptionRecord); err != nil {

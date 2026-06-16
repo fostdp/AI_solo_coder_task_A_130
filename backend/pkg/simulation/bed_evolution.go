@@ -10,6 +10,18 @@ import (
 	"gonum.org/v1/gonum/stat"
 )
 
+type WeirBoundaryCondition struct {
+	Name             string
+	WeirType         string
+	CrestElevation   float64
+	WeirLength       float64
+	DischargeCoeff   float64
+	SubmergenceRatio float64
+	BackwaterFactor  float64
+	SedimentTrapEff  float64
+	ReleaseThreshold float64
+}
+
 type SedimentTransportModel struct {
 	K              float64
 	ExponentFlow   float64
@@ -17,6 +29,7 @@ type SedimentTransportModel struct {
 	Porosity       float64
 	BulkDensity    float64
 	TimeStepYears  float64
+	BoundaryWeirs  []WeirBoundaryCondition
 }
 
 type BedEvolutionResult struct {
@@ -37,6 +50,41 @@ func NewSedimentTransportModel() *SedimentTransportModel {
 		Porosity:      0.4,
 		BulkDensity:   2650.0,
 		TimeStepYears: 1.0,
+		BoundaryWeirs: []WeirBoundaryCondition{
+			{
+				Name:             "飞沙堰",
+				WeirType:         "overflow",
+				CrestElevation:   728.0,
+				WeirLength:       120.0,
+				DischargeCoeff:   0.45,
+				SubmergenceRatio: 0.0,
+				BackwaterFactor:  0.15,
+				SedimentTrapEff:  0.35,
+				ReleaseThreshold: 730.0,
+			},
+			{
+				Name:             "宝瓶口",
+				WeirType:         "orifice",
+				CrestElevation:   727.0,
+				WeirLength:       20.0,
+				DischargeCoeff:   0.62,
+				SubmergenceRatio: 0.0,
+				BackwaterFactor:  0.25,
+				SedimentTrapEff:  0.20,
+				ReleaseThreshold: 731.0,
+			},
+			{
+				Name:             "人字堤",
+				WeirType:         "overflow",
+				CrestElevation:   727.5,
+				WeirLength:       80.0,
+				DischargeCoeff:   0.40,
+				SubmergenceRatio: 0.0,
+				BackwaterFactor:  0.10,
+				SedimentTrapEff:  0.15,
+				ReleaseThreshold: 729.5,
+			},
+		},
 	}
 }
 
@@ -53,6 +101,84 @@ func (m *SedimentTransportModel) CalculateBedChange(
 	area := channelWidth * channelLength
 	elevationChange := bulkVolume / area
 	return elevationChange
+}
+
+func (w *WeirBoundaryCondition) CalculateWeirOverflow(headwaterLevel float64) float64 {
+	if headwaterLevel <= w.CrestElevation {
+		return 0
+	}
+	head := headwaterLevel - w.CrestElevation
+	if w.SubmergenceRatio > 0.8 {
+		head *= math.Pow(1-w.SubmergenceRatio, 0.5)
+	}
+	Q := w.DischargeCoeff * w.WeirLength * math.Pow(head, 1.5) * 9.81
+	return Q
+}
+
+func (w *WeirBoundaryCondition) CalculateBackwaterEffect(upstreamLevel float64) float64 {
+	backwaterRise := w.BackwaterFactor * math.Pow(upstreamLevel-w.CrestElevation, 0.5)
+	return math.Max(0, backwaterRise)
+}
+
+func (w *WeirBoundaryCondition) CalculateSedimentRetention(sedimentLoad, flowRate float64) float64 {
+	if flowRate <= 0 {
+		return sedimentLoad
+	}
+	trappedSediment := sedimentLoad * w.SedimentTrapEff
+	return trappedSediment
+}
+
+func (m *SedimentTransportModel) ApplyWeirBoundaryConditions(
+	flowRate, waterLevel, sedimentLoad float64,
+	stationID string,
+) (adjustedFlowRate, adjustedSediment float64) {
+	adjustedFlowRate = flowRate
+	adjustedSediment = sedimentLoad
+
+	for i := range m.BoundaryWeirs {
+		weir := &m.BoundaryWeirs[i]
+		if !isStationUpstreamOfWeir(stationID, weir.Name) {
+			continue
+		}
+
+		backwaterRise := weir.CalculateBackwaterEffect(waterLevel)
+		adjustedFlowRate *= (1 + backwaterRise*0.01)
+
+		if waterLevel > weir.ReleaseThreshold {
+			overflowQ := weir.CalculateWeirOverflow(waterLevel)
+			flowRatio := 1.0 - math.Min(overflowQ/adjustedFlowRate, 0.3)
+			adjustedFlowRate *= flowRatio
+			adjustedSediment *= (1.0 - weir.SedimentTrapEff*0.3)
+		}
+
+		if waterLevel > weir.CrestElevation && waterLevel <= weir.ReleaseThreshold {
+			trapped := weir.CalculateSedimentRetention(adjustedSediment, adjustedFlowRate)
+			adjustedSediment -= trapped * 0.1
+		}
+	}
+
+	adjustedFlowRate = math.Max(adjustedFlowRate, 10.0)
+	adjustedSediment = math.Max(adjustedSediment, 0.01)
+
+	return adjustedFlowRate, adjustedSediment
+}
+
+func isStationUpstreamOfWeir(stationID, weirName string) bool {
+	upstreamMap := map[string][]string{
+		"飞沙堰": {"NEIJ-001", "NEIJ-002", "WAIJ-001", "WAIJ-002", "FSSY-001"},
+		"宝瓶口": {"NEIJ-001", "NEIJ-002", "NEIJ-003", "FSSY-001", "FSSY-002"},
+		"人字堤": {"NEIJ-001", "NEIJ-002", "NEIJ-003", "RJK-001"},
+	}
+	stations, ok := upstreamMap[weirName]
+	if !ok {
+		return false
+	}
+	for _, s := range stations {
+		if s == stationID {
+			return true
+		}
+	}
+	return false
 }
 
 func PredictBedEvolution(
@@ -123,9 +249,16 @@ func PredictBedEvolution(
 		annualFlow *= seasonalFactor
 		annualSediment *= seasonalFactor
 
-		sedimentTransported := model.CalculateSedimentTransport(annualFlow, slope, annualSediment)
+		adjustedFlow, adjustedSediment := model.ApplyWeirBoundaryConditions(
+			annualFlow,
+			728.5+math.Sin(float64(year)*0.5)*0.3,
+			annualSediment,
+			stationID,
+		)
 
-		upstreamSediment := annualSediment * annualFlow * 3600 * 24 * 365 * 1.1
+		sedimentTransported := model.CalculateSedimentTransport(adjustedFlow, slope, adjustedSediment)
+
+		upstreamSediment := adjustedSediment * adjustedFlow * 3600 * 24 * 365 * 1.1
 		downstreamSediment := sedimentTransported
 
 		annualDeposition := 0.0
@@ -172,7 +305,7 @@ func PredictBedEvolution(
 			PredictedBedElevation:     currentElevation,
 			PredictedSedimentDeposition: math.Max(0, annualDeposition),
 			PredictedErosion:          math.Abs(math.Min(0, annualErosion)),
-			ModelVersion:              "v1.0",
+			ModelVersion:              "v2.0-weir-boundary",
 			Confidence:                confidence,
 		}
 
@@ -202,12 +335,26 @@ func generateDefaultPrediction(
 		}
 	}
 
+	model := NewSedimentTransportModel()
+
 	var results []BedEvolutionResult
 	currentElevation := bedrockElevation + 2.0
 
 	for year := 1; year <= years; year++ {
 		depositionRate := 0.08 + 0.02*math.Sin(float64(year)*0.4)
 		erosionRate := 0.03 + 0.01*math.Sin(float64(year)*0.6)
+
+		waterLevel := 728.5 + math.Sin(float64(year)*0.5)*0.3
+		flowRate := 250.0 + math.Sin(float64(year)*0.4)*50
+		sedimentLoad := depositionRate * 2650 * 50 * 1000
+
+		_, adjustedSediment := model.ApplyWeirBoundaryConditions(
+			flowRate, waterLevel, sedimentLoad, stationID,
+		)
+
+		sedimentRatio := adjustedSediment / math.Max(sedimentLoad, 1)
+		depositionRate *= sedimentRatio
+		erosionRate *= (2.0 - sedimentRatio)
 
 		annualDeposition := depositionRate
 		annualErosion := erosionRate
@@ -244,7 +391,7 @@ func generateDefaultPrediction(
 			PredictedBedElevation:       currentElevation,
 			PredictedSedimentDeposition: annualDeposition,
 			PredictedErosion:            annualErosion,
-			ModelVersion:                "v1.0-default",
+			ModelVersion:                "v2.0-default-weir",
 			Confidence:                  confidence,
 		}
 
